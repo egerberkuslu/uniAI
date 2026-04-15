@@ -1,0 +1,113 @@
+services:
+  postgres:
+    image: ankane/pgvector:v0.5.1
+    container_name: student-rag-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-rbac_rag_db}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ../src/db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ../src/db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-rbac_rag_db}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  ingest:
+    build: ..
+    working_dir: /app
+    container_name: student-rag-ingest
+    command: ["python", "scripts/ingest.py"]
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-rbac_rag_db}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      - CHUNK_SIZE=200
+      - CHUNK_OVERLAP=50
+      - RAG_TOP_K=3
+      - SIMILARITY_THRESHOLD=0.3
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    build: ..
+    working_dir: /app
+    container_name: student-rag-web
+    command: ["uvicorn", "src.web.app:app", "--host", "0.0.0.0", "--port", "8080"]
+    network_mode: host
+    environment:
+      - DB_HOST=localhost
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-rbac_rag_db}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - USE_CLAUDE_API=false
+      - LOCAL_MODEL_NAME=deepseek-r1:14b
+      - OLLAMA_HOST=http://localhost:11434
+      - LLM_MAX_TOKENS=512
+      - USE_LLM_ROUTER=true
+      - LLM_ROUTER_MAX_TOKENS=700
+      - EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      - CHUNK_SIZE=200
+      - CHUNK_OVERLAP=50
+      - RAG_TOP_K=3
+      - SIMILARITY_THRESHOLD=0.3
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      - MCP_TRANSPORT=streamable-http
+      - DEFAULT_USER_TOKEN=${DEFAULT_USER_TOKEN:-admin_token}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingest:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  mcp:
+    build: ..
+    working_dir: /app
+    container_name: student-rag-mcp
+    command: ["python", "-m", "src.mcp.server"]
+    network_mode: host
+    environment:
+      - DB_HOST=localhost
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-rbac_rag_db}
+      - DB_USER=${DB_USER:-postgres}
+      - DB_PASSWORD=${DB_PASSWORD:-postgres}
+      - USE_CLAUDE_API=false
+      - LOCAL_MODEL_NAME=deepseek-r1:14b
+      - OLLAMA_HOST=http://localhost:11434
+      - LLM_MAX_TOKENS=512
+      - USE_LLM_ROUTER=true
+      - LLM_ROUTER_MAX_TOKENS=700
+      - EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+      - CHUNK_SIZE=200
+      - CHUNK_OVERLAP=50
+      - RAG_TOP_K=3
+      - SIMILARITY_THRESHOLD=0.3
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      - MCP_TRANSPORT=streamable-http
+      - DEFAULT_USER_TOKEN=${DEFAULT_USER_TOKEN:-admin_token}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingest:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  pg_data:
